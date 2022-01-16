@@ -11,9 +11,11 @@ VERSION="0.0.9"
 
 FILENAME=$0
 
-MAX_FEE=50 # Sats
+MAX_FEE=2 # Sats default
 
-TOLERANCE=0.95 # 95%
+TOLERANCE=0.5 # 50% each side
+
+PARTS=2 # Split balance in 2 PARTS by default
 
 LND_DIR="${LND_DIR:-$HOME/.lnd/}"
 
@@ -195,13 +197,24 @@ rebalance () {
     channels | grep --color=always $c
   done
   echo
+  # Split the fee in parts and make sure the minimal fee is 1
+  MAX_FEE=`bc <<< "$MAX_FEE/$PARTS"`
+  if [[ $MAX_FEE -lt 1 ]]; then
+    MAX_FEE=1
+  fi
   for v in ${UNBALANCED[@]}; do
     amount=`reb -l --show-only $v | grep "Rebalance amount:" | awk '{ printf $3 }' | sed 's/,//g'`
-    if [[  `bc -l <<< "$amount < 0"` -eq 1 ]]; then
-      reb -f $v --amount ${amount#-} --reckless --min-local 0 --min-amount 0 --fee-limit $MAX_FEE --min-remote 0
-    elif [[ `bc -l <<< "$amount > 0"` -eq 1 ]]; then
-      reb -t $v --amount $amount --reckless --min-local 0 --min-amount 0 --fee-limit $MAX_FEE --min-remote 0
-    fi
+    echo -e "\nBalancing Channel ID $v with amount $amount in $PARTS parts spliting the $MAX_FEE Sats max fee\n"
+    amount=`bc <<< "$amount/$PARTS"`
+    for c in `seq 1 $PARTS`; do
+      if [[  `bc -l <<< "$amount < 0"` -eq 1 ]]; then
+        echo -e "\nreb -f $v --amount ${amount#-} --reckless --min-local 0 --min-amount 0 --fee-limit $MAX_FEE --min-remote 0\n"
+        reb -f $v --amount ${amount#-} --reckless --min-local 0 --min-amount 0 --fee-limit $MAX_FEE --min-remote 0
+      elif [[ `bc -l <<< "$amount > 0"` -eq 1 ]]; then
+        echo -e "\nreb -t $v --amount ${amount#-} --reckless --min-local 0 --min-amount 0 --fee-limit $MAX_FEE --min-remote 0\n"
+        reb -t $v --amount $amount --reckless --min-local 0 --min-amount 0 --fee-limit $MAX_FEE --min-remote 0
+      fi
+    done
   done
   echo -e "\nRebalance completed!\nPlease use '$FILENAME list' to see your perfectly rebalanced list :)\n"
 }
@@ -238,17 +251,18 @@ for i in "$@"; do
     exit
     ;;
   -h|--help)
-    echo -e "Usage: $FILENAME {-v|-h|-m=VALUE|-t=VALUE|list|rebalance}\n"
+    echo -e "Usage: $FILENAME {-v|-h|-m=VALUE|-t=VALUE|-p=PARTS|list|rebalance}\n"
     echo -e "Optional:"
     echo -e "\t-v, --version\n\t\tShows the version for this script\n"
     echo -e "\t-h, --help\n\t\tShows this help\n"
     echo -e "\t-i=CHANNEL_ID, --ignore=CHANNEL_ID\n\t\tIgnores a specific channel id useful only if passed before 'list' or 'rebalance'"
     echo -e "\t\tIt can be used many times and should match a number of 18 digits\n"
-    echo -e "\t-m=MAX_FEE, --max-fee=MAX_FEE\n\t\t(Default: 50) Changes max fees useful only if passed before 'list' or 'rebalance'\n"
+    echo -e "\t-m=MAX_FEE, --max-fee=MAX_FEE\n\t\t(Default: 2) Changes max fees useful only if passed before 'list' or 'rebalance'\n"
     echo -e "\t-t=TOLERANCE, --tolerance=TOLERANCE\n\t\t(Default: 0.95) Changes tolerance useful only if passed before 'rebalance'\n"
+    echo -e "\t-p=PARTS, --parts=PARTS\n\t\t(Default: 2) split the rebalance amounts in parts useful only if passed before 'rebalance'\n"
     echo -e "list:\n\tShows a list of all channels in compacted mode using 'rebalance.py -c -l'"
     echo -e "\tfor example to: '$FILENAME --tolerance=0.99 list'\n"
-    echo -e "rebalance:\n\tTries to rebalance unbalanced channels with default max fee of 50 and tolerance 0.95"
+    echo -e "rebalance:\n\tTries to rebalance unbalanced channels with default max fee of 2 sats and tolerance 0.5"
     echo -e "\tfor example to: '$FILENAME --max-fee=10 --tolerance=0.98 rebalance'\n"
     exit
     ;;
@@ -258,6 +272,14 @@ for i in "$@"; do
       exit 1
     fi
     IGNORE+=("${i#*=}")
+    shift
+    ;;
+  -p=*|--parts=*)
+    PARTS=${i#*=}
+    if ! [[ "$PARTS" =~ ^[1-9]$ ]]; then
+      echo -e "Error: the PARTS value should be greater than 0 and less than 10\n"
+      exit 1
+    fi
     shift
     ;;
   list)
